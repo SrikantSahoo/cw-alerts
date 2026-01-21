@@ -1,0 +1,107 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudWatch Alarms for ALB 5XX Errors'
+
+Parameters:
+  LoadBalancerName:
+    Type: String
+    Description: Name of the Application Load Balancer
+  LoadBalancerArn:
+    Type: String
+    Description: ARN of the Application Load Balancer
+  AlarmThreshold:
+    Type: Number
+    Description: Threshold for number of 5XX errors
+    Default: 10
+  EvaluationPeriods:
+    Type: Number
+    Description: Number of periods to evaluate
+    Default: 1
+  SnsTopicArn:
+    Type: String
+    Description: SNS Topic ARN for notifications
+
+Resources:
+  ALBTarget5XXErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'ALB-${LoadBalancerName}-5XX-Errors-High'
+      AlarmDescription: Alert when ALB target returns 5XX errors
+      MetricName: HTTPCode_Target_5XX_Count
+      Namespace: AWS/ApplicationELB
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: !Ref EvaluationPeriods
+      Threshold: !Ref AlarmThreshold
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Select [1, !Split [':', !Ref LoadBalancerArn]]
+      AlarmActions:
+        - !Ref SnsTopicArn
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Service
+          Value: ALB
+        - Key: AlertType
+          Value: 5XX-Errors
+
+  ALBElastic5XXErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'ALB-${LoadBalancerName}-Elastic-5XX-Errors-High'
+      AlarmDescription: Alert when ALB itself returns 5XX errors
+      MetricName: HTTPCode_ELB_5XX_Count
+      Namespace: AWS/ApplicationELB
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: !Ref EvaluationPeriods
+      Threshold: !Ref AlarmThreshold
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Select [1, !Split [':', !Ref LoadBalancerArn]]
+      AlarmActions:
+        - !Ref SnsTopicArn
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Service
+          Value: ALB
+        - Key: AlertType
+          Value: 5XX-Errors
+
+  ALBUnHealthyHostsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'ALB-${LoadBalancerName}-Unhealthy-Hosts'
+      AlarmDescription: Alert when ALB has unhealthy targets
+      MetricName: UnHealthyHostCount
+      Namespace: AWS/ApplicationELB
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: LoadBalancer
+          Value: !Select [1, !Split [':', !Ref LoadBalancerArn]]
+      AlarmActions:
+        - !Ref SnsTopicArn
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Service
+          Value: ALB
+        - Key: AlertType
+          Value: Unhealthy-Hosts
+
+Outputs:
+  Target5XXAlarmName:
+    Description: Name of the Target 5XX errors alarm
+    Value: !Ref ALBTarget5XXErrorsAlarm
+
+  Elastic5XXAlarmName:
+    Description: Name of the ELB 5XX errors alarm
+    Value: !Ref ALBElastic5XXErrorsAlarm
+
+  UnHealthyHostsAlarmName:
+    Description: Name of the unhealthy hosts alarm
+    Value: !Ref ALBUnHealthyHostsAlarm

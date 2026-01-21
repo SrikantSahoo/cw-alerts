@@ -1,0 +1,9 @@
+template:
+  path: alb-5xx-alerts.yaml
+  type: file
+
+parameters:
+  LoadBalancerName: my-alb
+  AlarmThreshold: 10
+  EvaluationPeriods: 1
+  SnsTopicArn: !stack_output sns-topic.yaml::SNSTopicArn

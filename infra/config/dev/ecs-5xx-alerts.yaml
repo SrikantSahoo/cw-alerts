@@ -1,0 +1,10 @@
+template:
+  path: ecs-5xx-alerts.yaml
+  type: file
+
+parameters:
+  ClusterName: my-cluster
+  ServiceName: my-service
+  AlarmThreshold: 5
+  EvaluationPeriods: 1
+  SnsTopicArn: !stack_output sns-topic.yaml::SNSTopicArn

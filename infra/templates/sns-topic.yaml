@@ -1,0 +1,41 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'SNS Topic for CloudWatch Alarms Notifications'
+
+Parameters:
+  EmailAddress:
+    Type: String
+    Description: Email address to receive alerts
+  TopicName:
+    Type: String
+    Description: Name of the SNS topic
+    Default: cw-alerts
+
+Resources:
+  AlertTopic:
+    Type: AWS::SNS::Topic
+    Properties:
+      DisplayName: CloudWatch Alerts Notifications
+      TopicName: !Ref TopicName
+      Tags:
+        - Key: Purpose
+          Value: CloudWatch-Alerts
+
+  EmailSubscription:
+    Type: AWS::SNS::Subscription
+    Properties:
+      Endpoint: !Ref EmailAddress
+      Protocol: email
+      TopicArn: !Ref AlertTopic
+
+Outputs:
+  SNSTopicArn:
+    Description: ARN of the SNS topic
+    Value: !GetAtt AlertTopic.TopicArn
+    Export:
+      Name: !Sub '${AWS::StackName}-SNSTopicArn'
+
+  SNSTopicName:
+    Description: Name of the SNS topic
+    Value: !GetAtt AlertTopic.TopicName
+    Export:
+      Name: !Sub '${AWS::StackName}-SNSTopicName'

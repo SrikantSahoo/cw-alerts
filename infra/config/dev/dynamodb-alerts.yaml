@@ -1,0 +1,9 @@
+template:
+  path: dynamodb-alerts.yaml
+  type: file
+
+parameters:
+  TableName: my-table
+  AlarmThreshold: 100
+  EvaluationPeriods: 2
+  SnsTopicArn: !stack_output sns-topic.yaml::SNSTopicArn

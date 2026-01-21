@@ -1,0 +1,160 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudWatch Alarms for SQS Queues'
+
+Parameters:
+  QueueName:
+    Type: String
+    Description: Name of the SQS queue
+  AlarmThreshold:
+    Type: Number
+    Description: Threshold for dead letter queue messages
+    Default: 50
+  EvaluationPeriods:
+    Type: Number
+    Description: Number of periods to evaluate
+    Default: 2
+  SnsTopicArn:
+    Type: String
+    Description: SNS Topic ARN for notifications
+
+Resources:
+  SQSDeadLetterQueueAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'SQS-${QueueName}-DeadLetter-Messages-High'
+      AlarmDescription: Alert when messages are sent to DLQ (indicates 5XX/processing errors)
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: !Ref EvaluationPeriods
+      Threshold: !Ref AlarmThreshold
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !Sub '${QueueName}-dlq'
+      AlarmActions:
+        - !Ref SnsTopicArn
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Service
+          Value: SQS
+        - Key: AlertType
+          Value: DLQ-Messages
+
+  SQSQueueDepthAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'SQS-${QueueName}-Queue-Depth-High'
+      AlarmDescription: Alert when queue depth is high (indicates processing issues)
+      MetricName: ApproximateNumberOfMessagesVisible
+      Namespace: AWS/SQS
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 1000
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !Ref QueueName
+      AlarmActions:
+        - !Ref SnsTopicArn
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Service
+          Value: SQS
+        - Key: AlertType
+          Value: Queue-Depth
+
+  SQSOldestMessageAgeAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'SQS-${QueueName}-Oldest-Message-Age-High'
+      AlarmDescription: Alert when messages are stuck in queue
+      MetricName: ApproximateAgeOfOldestMessage
+      Namespace: AWS/SQS
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 3600
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !Ref QueueName
+      AlarmActions:
+        - !Ref SnsTopicArn
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Service
+          Value: SQS
+        - Key: AlertType
+          Value: Message-Age
+
+  SQSNumberOfMessagesSentAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'SQS-${QueueName}-Messages-Sent-Spike'
+      AlarmDescription: Alert when unexpected spike in messages sent (potential issue)
+      MetricName: NumberOfMessagesSent
+      Namespace: AWS/SQS
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 10000
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !Ref QueueName
+      AlarmActions:
+        - !Ref SnsTopicArn
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Service
+          Value: SQS
+        - Key: AlertType
+          Value: Message-Spike
+
+  SQSNumberOfMessagesDeletedAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'SQS-${QueueName}-Messages-Deleted-Low'
+      AlarmDescription: Alert when message deletion rate drops significantly
+      MetricName: NumberOfMessagesDeleted
+      Namespace: AWS/SQS
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+        - Name: QueueName
+          Value: !Ref QueueName
+      AlarmActions:
+        - !Ref SnsTopicArn
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Service
+          Value: SQS
+        - Key: AlertType
+          Value: Processing-Failure
+
+Outputs:
+  DeadLetterQueueAlarmName:
+    Description: Name of the DLQ alarm
+    Value: !Ref SQSDeadLetterQueueAlarm
+
+  QueueDepthAlarmName:
+    Description: Name of the queue depth alarm
+    Value: !Ref SQSQueueDepthAlarm
+
+  OldestMessageAgeAlarmName:
+    Description: Name of the oldest message age alarm
+    Value: !Ref SQSOldestMessageAgeAlarm
+
+  NumberOfMessagesSentAlarmName:
+    Description: Name of the messages sent alarm
+    Value: !Ref SQSNumberOfMessagesSentAlarm
+
+  NumberOfMessagesDeletedAlarmName:
+    Description: Name of the messages deleted alarm
+    Value: !Ref SQSNumberOfMessagesDeletedAlarm

@@ -1,0 +1,7 @@
+template:
+  path: sns-topic.yaml
+  type: file
+
+parameters:
+  EmailAddress: alerts@example.com
+  TopicName: cw-alerts-dev

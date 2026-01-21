@@ -1,0 +1,132 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudWatch Alarms for DynamoDB'
+
+Parameters:
+  TableName:
+    Type: String
+    Description: Name of the DynamoDB table
+  AlarmThreshold:
+    Type: Number
+    Description: Threshold for system errors
+    Default: 100
+  EvaluationPeriods:
+    Type: Number
+    Description: Number of periods to evaluate
+    Default: 2
+  SnsTopicArn:
+    Type: String
+    Description: SNS Topic ARN for notifications
+
+Resources:
+  DynamoDBSystemErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'DynamoDB-${TableName}-System-Errors-High'
+      AlarmDescription: Alert when DynamoDB experiences system errors (5XX equivalent)
+      MetricName: SystemErrors
+      Namespace: AWS/DynamoDB
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: !Ref EvaluationPeriods
+      Threshold: !Ref AlarmThreshold
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: TableName
+          Value: !Ref TableName
+      AlarmActions:
+        - !Ref SnsTopicArn
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Service
+          Value: DynamoDB
+        - Key: AlertType
+          Value: System-Errors
+
+  DynamoDBUserErrorsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'DynamoDB-${TableName}-User-Errors-High'
+      AlarmDescription: Alert when DynamoDB user errors spike (4XX equivalent)
+      MetricName: UserErrors
+      Namespace: AWS/DynamoDB
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: !Ref EvaluationPeriods
+      Threshold: 1000
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      Dimensions:
+        - Name: TableName
+          Value: !Ref TableName
+      AlarmActions:
+        - !Ref SnsTopicArn
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Service
+          Value: DynamoDB
+        - Key: AlertType
+          Value: User-Errors
+
+  DynamoDBConsumedWriteCapacityAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'DynamoDB-${TableName}-High-Write-Capacity'
+      AlarmDescription: Alert when write capacity is consistently high
+      MetricName: ConsumedWriteCapacityUnits
+      Namespace: AWS/DynamoDB
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: TableName
+          Value: !Ref TableName
+      AlarmActions:
+        - !Ref SnsTopicArn
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Service
+          Value: DynamoDB
+        - Key: AlertType
+          Value: Capacity-Warning
+
+  DynamoDBConsumedReadCapacityAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'DynamoDB-${TableName}-High-Read-Capacity'
+      AlarmDescription: Alert when read capacity is consistently high
+      MetricName: ConsumedReadCapacityUnits
+      Namespace: AWS/DynamoDB
+      Statistic: Average
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 80
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+        - Name: TableName
+          Value: !Ref TableName
+      AlarmActions:
+        - !Ref SnsTopicArn
+      TreatMissingData: notBreaching
+      Tags:
+        - Key: Service
+          Value: DynamoDB
+        - Key: AlertType
+          Value: Capacity-Warning
+
+Outputs:
+  SystemErrorsAlarmName:
+    Description: Name of the system errors alarm
+    Value: !Ref DynamoDBSystemErrorsAlarm
+
+  UserErrorsAlarmName:
+    Description: Name of the user errors alarm
+    Value: !Ref DynamoDBUserErrorsAlarm
+
+  WriteCapacityAlarmName:
+    Description: Name of the write capacity alarm
+    Value: !Ref DynamoDBConsumedWriteCapacityAlarm
+
+  ReadCapacityAlarmName:
+    Description: Name of the read capacity alarm
+    Value: !Ref DynamoDBConsumedReadCapacityAlarm

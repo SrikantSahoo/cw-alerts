@@ -1,0 +1,4 @@
+sceptre>=2.7.0
+PyYAML>=5.3
+boto3>=1.26.0
+botocore>=1.29.0

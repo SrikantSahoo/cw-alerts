@@ -1,0 +1,9 @@
+template:
+  path: sqs-alerts.yaml
+  type: file
+
+parameters:
+  QueueName: my-queue
+  AlarmThreshold: 50
+  EvaluationPeriods: 2
+  SnsTopicArn: !stack_output sns-topic.yaml::SNSTopicArn
