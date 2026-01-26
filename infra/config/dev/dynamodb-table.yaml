@@ -1,0 +1,22 @@
+template:
+  path: dynamodb-table.yaml
+  type: file
+
+parameters:
+  TableName: my-table
+  BillingMode: PAY_PER_REQUEST
+  ReadCapacityUnits: 5
+  WriteCapacityUnits: 5
+  PartitionKeyName: pk
+  PartitionKeyType: S
+  SortKeyName: sk
+  SortKeyType: S
+  EnablePointInTimeRecovery: 'true'
+  EnableDeletionProtection: 'false'
+  SSEEnabled: 'true'
+  KmsKeyArn: ''
+  BackupVaultName: cw-alerts-backup-vault
+  BackupPlanScheduleExpression: cron(0 5 * * ? *)
+  BackupRetentionDays: 35
+  BackupStartWindowMinutes: 60
+  BackupCompletionWindowMinutes: 360

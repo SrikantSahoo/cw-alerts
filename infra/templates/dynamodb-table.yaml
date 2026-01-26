@@ -1,0 +1,113 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'DynamoDB table with built-in point-in-time recovery (PITR) and optional on-demand backups'
+
+Parameters:
+  TableName:
+    Type: String
+    Description: Name of the DynamoDB table
+
+  BillingMode:
+    Type: String
+    Default: PAY_PER_REQUEST
+    AllowedValues:
+      - PAY_PER_REQUEST
+      - PROVISIONED
+    Description: Billing mode for the table
+
+  ReadCapacityUnits:
+    Type: Number
+    Default: 5
+    Description: Read capacity (used when BillingMode is PROVISIONED)
+
+  WriteCapacityUnits:
+    Type: Number
+    Default: 5
+    Description: Write capacity (used when BillingMode is PROVISIONED)
+
+  PartitionKeyName:
+    Type: String
+    Description: Partition key attribute name
+
+  PartitionKeyType:
+    Type: String
+    Default: S
+    AllowedValues: [S, N, B]
+    Description: Partition key attribute type (S=String, N=Number, B=Binary)
+
+  SortKeyName:
+    Type: String
+    Default: ''
+    Description: Sort key attribute name (leave blank if none)
+
+  SortKeyType:
+    Type: String
+    Default: S
+    AllowedValues: [S, N, B]
+    Description: Sort key attribute type (only used when SortKeyName is set)
+
+  EnablePointInTimeRecovery:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Enable continuous backups (PITR)
+
+  EnableDeletionProtection:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Prevent table deletion
+
+  SSEEnabled:
+    Type: String
+    Default: 'true'
+    AllowedValues: ['true', 'false']
+    Description: Enable server-side encryption
+
+  KmsKeyArn:
+    Type: String
+    Default: ''
+    Description: Optional KMS key ARN for encryption and backup vault
+
+Conditions:
+  HasSortKey: !Not [!Equals [!Ref SortKeyName, '']]
+  UseProvisioned: !Equals [!Ref BillingMode, 'PROVISIONED']
+  UseKms: !Not [!Equals [!Ref KmsKeyArn, '']]
+
+Resources:
+  DynamoTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Ref TableName
+      BillingMode: !Ref BillingMode
+      AttributeDefinitions:
+        - AttributeName: !Ref PartitionKeyName
+          AttributeType: !Ref PartitionKeyType
+        - !If [HasSortKey, { AttributeName: !Ref SortKeyName, AttributeType: !Ref SortKeyType }, !Ref 'AWS::NoValue']
+      KeySchema:
+        - AttributeName: !Ref PartitionKeyName
+          KeyType: HASH
+        - !If [HasSortKey, { AttributeName: !Ref SortKeyName, KeyType: RANGE }, !Ref 'AWS::NoValue']
+      ProvisionedThroughput: !If
+        - UseProvisioned
+        - { ReadCapacityUnits: !Ref ReadCapacityUnits, WriteCapacityUnits: !Ref WriteCapacityUnits }
+        - !Ref 'AWS::NoValue'
+      SSESpecification:
+        SSEEnabled: !Equals [!Ref SSEEnabled, 'true']
+        KMSMasterKeyId: !If [UseKms, !Ref KmsKeyArn, !Ref 'AWS::NoValue']
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: !Equals [!Ref EnablePointInTimeRecovery, 'true']
+      DeletionProtectionEnabled: !Equals [!Ref EnableDeletionProtection, 'true']
+      Tags:
+        - Key: Service
+          Value: DynamoDB
+        - Key: Backup
+          Value: Enabled
+
+Outputs:
+  TableName:
+    Description: DynamoDB table name
+    Value: !Ref TableName
+
+  TableArn:
+    Description: DynamoDB table ARN
+    Value: !Sub 'arn:${AWS::Partition}:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${TableName}'
