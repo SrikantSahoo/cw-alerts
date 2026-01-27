@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'CloudWatch Alarms for DynamoDB'
+Description: 'CloudWatch Alarms for DynamoDB - Critical Service Failures (5XX equivalent)'
 
 Parameters:
   TableName:
@@ -21,8 +21,8 @@ Resources:
   DynamoDBSystemErrorsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'DynamoDB-${TableName}-System-Errors-High'
-      AlarmDescription: Alert when DynamoDB experiences system errors (5XX equivalent)
+      AlarmName: !Sub 'DynamoDB-${TableName}-System-Errors-Critical'
+      AlarmDescription: CRITICAL - DynamoDB system errors indicate service-side failures (5XX equivalent)
       MetricName: SystemErrors
       Namespace: AWS/DynamoDB
       Statistic: Sum
@@ -41,18 +41,20 @@ Resources:
           Value: DynamoDB
         - Key: AlertType
           Value: System-Errors
+        - Key: Severity
+          Value: Critical
 
-  DynamoDBUserErrorsAlarm:
+  DynamoDBReadThrottleAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'DynamoDB-${TableName}-User-Errors-High'
-      AlarmDescription: Alert when DynamoDB user errors spike (4XX equivalent)
-      MetricName: UserErrors
+      AlarmName: !Sub 'DynamoDB-${TableName}-Read-Throttling-Critical'
+      AlarmDescription: CRITICAL - Read requests throttled, service capacity exceeded causing failures
+      MetricName: ReadThrottleEvents
       Namespace: AWS/DynamoDB
       Statistic: Sum
       Period: 60
-      EvaluationPeriods: !Ref EvaluationPeriods
-      Threshold: 1000
+      EvaluationPeriods: 2
+      Threshold: 10
       ComparisonOperator: GreaterThanOrEqualToThreshold
       Dimensions:
         - Name: TableName
@@ -64,20 +66,22 @@ Resources:
         - Key: Service
           Value: DynamoDB
         - Key: AlertType
-          Value: User-Errors
+          Value: Read-Throttling
+        - Key: Severity
+          Value: Critical
 
-  DynamoDBConsumedWriteCapacityAlarm:
+  DynamoDBWriteThrottleAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'DynamoDB-${TableName}-High-Write-Capacity'
-      AlarmDescription: Alert when write capacity is consistently high
-      MetricName: ConsumedWriteCapacityUnits
+      AlarmName: !Sub 'DynamoDB-${TableName}-Write-Throttling-Critical'
+      AlarmDescription: CRITICAL - Write requests throttled, service capacity exceeded causing failures
+      MetricName: WriteThrottleEvents
       Namespace: AWS/DynamoDB
-      Statistic: Average
-      Period: 300
+      Statistic: Sum
+      Period: 60
       EvaluationPeriods: 2
-      Threshold: 80
-      ComparisonOperator: GreaterThanThreshold
+      Threshold: 10
+      ComparisonOperator: GreaterThanOrEqualToThreshold
       Dimensions:
         - Name: TableName
           Value: !Ref TableName
@@ -88,20 +92,22 @@ Resources:
         - Key: Service
           Value: DynamoDB
         - Key: AlertType
-          Value: Capacity-Warning
+          Value: Write-Throttling
+        - Key: Severity
+          Value: Critical
 
-  DynamoDBConsumedReadCapacityAlarm:
+  DynamoDBConditionalCheckFailuresAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'DynamoDB-${TableName}-High-Read-Capacity'
-      AlarmDescription: Alert when read capacity is consistently high
-      MetricName: ConsumedReadCapacityUnits
+      AlarmName: !Sub 'DynamoDB-${TableName}-Transaction-Failures-High'
+      AlarmDescription: HIGH - Conditional check failures spiking may indicate data consistency issues
+      MetricName: ConditionalCheckFailedRequests
       Namespace: AWS/DynamoDB
-      Statistic: Average
+      Statistic: Sum
       Period: 300
       EvaluationPeriods: 2
-      Threshold: 80
-      ComparisonOperator: GreaterThanThreshold
+      Threshold: 100
+      ComparisonOperator: GreaterThanOrEqualToThreshold
       Dimensions:
         - Name: TableName
           Value: !Ref TableName
@@ -112,21 +118,23 @@ Resources:
         - Key: Service
           Value: DynamoDB
         - Key: AlertType
-          Value: Capacity-Warning
+          Value: Transaction-Failures
+        - Key: Severity
+          Value: High
 
 Outputs:
   SystemErrorsAlarmName:
-    Description: Name of the system errors alarm
+    Description: Name of the system errors alarm (5XX equivalent)
     Value: !Ref DynamoDBSystemErrorsAlarm
 
-  UserErrorsAlarmName:
-    Description: Name of the user errors alarm
-    Value: !Ref DynamoDBUserErrorsAlarm
+  ReadThrottleAlarmName:
+    Description: Name of the read throttling alarm
+    Value: !Ref DynamoDBReadThrottleAlarm
 
-  WriteCapacityAlarmName:
-    Description: Name of the write capacity alarm
-    Value: !Ref DynamoDBConsumedWriteCapacityAlarm
+  WriteThrottleAlarmName:
+    Description: Name of the write throttling alarm
+    Value: !Ref DynamoDBWriteThrottleAlarm
 
-  ReadCapacityAlarmName:
-    Description: Name of the read capacity alarm
-    Value: !Ref DynamoDBConsumedReadCapacityAlarm
+  TransactionFailuresAlarmName:
+    Description: Name of the transaction failures alarm
+    Value: !Ref DynamoDBConditionalCheckFailuresAlarm

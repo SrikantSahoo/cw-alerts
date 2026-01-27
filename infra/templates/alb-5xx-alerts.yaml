@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'CloudWatch Alarms for ALB 5XX Errors'
+Description: 'CloudWatch Alarms for ALB - Critical 5XX Service Failures'
 
 Parameters:
   LoadBalancerName:
@@ -24,8 +24,8 @@ Resources:
   ALBTarget5XXErrorsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'ALB-${LoadBalancerName}-5XX-Errors-High'
-      AlarmDescription: Alert when ALB target returns 5XX errors
+      AlarmName: !Sub 'ALB-${LoadBalancerName}-Target-5XX-Critical'
+      AlarmDescription: CRITICAL - Backend targets returning 5XX errors (application/service failures)
       MetricName: HTTPCode_Target_5XX_Count
       Namespace: AWS/ApplicationELB
       Statistic: Sum
@@ -43,13 +43,15 @@ Resources:
         - Key: Service
           Value: ALB
         - Key: AlertType
-          Value: 5XX-Errors
+          Value: Target-5XX
+        - Key: Severity
+          Value: Critical
 
   ALBElastic5XXErrorsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'ALB-${LoadBalancerName}-Elastic-5XX-Errors-High'
-      AlarmDescription: Alert when ALB itself returns 5XX errors
+      AlarmName: !Sub 'ALB-${LoadBalancerName}-ELB-5XX-Critical'
+      AlarmDescription: CRITICAL - ALB itself returning 5XX errors (load balancer infrastructure issues)
       MetricName: HTTPCode_ELB_5XX_Count
       Namespace: AWS/ApplicationELB
       Statistic: Sum
@@ -67,13 +69,15 @@ Resources:
         - Key: Service
           Value: ALB
         - Key: AlertType
-          Value: 5XX-Errors
+          Value: ELB-5XX
+        - Key: Severity
+          Value: Critical
 
   ALBUnHealthyHostsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'ALB-${LoadBalancerName}-Unhealthy-Hosts'
-      AlarmDescription: Alert when ALB has unhealthy targets
+      AlarmName: !Sub 'ALB-${LoadBalancerName}-No-Healthy-Targets'
+      AlarmDescription: CRITICAL - No healthy targets available (causes 5XX responses to clients)
       MetricName: UnHealthyHostCount
       Namespace: AWS/ApplicationELB
       Statistic: Average
@@ -91,17 +95,19 @@ Resources:
         - Key: Service
           Value: ALB
         - Key: AlertType
-          Value: Unhealthy-Hosts
+          Value: No-Healthy-Targets
+        - Key: Severity
+          Value: Critical
 
 Outputs:
   Target5XXAlarmName:
-    Description: Name of the Target 5XX errors alarm
+    Description: Name of the Target 5XX errors alarm (backend failures)
     Value: !Ref ALBTarget5XXErrorsAlarm
 
-  Elastic5XXAlarmName:
-    Description: Name of the ELB 5XX errors alarm
+  ELB5XXAlarmName:
+    Description: Name of the ELB 5XX errors alarm (ALB infrastructure failures)
     Value: !Ref ALBElastic5XXErrorsAlarm
 
-  UnHealthyHostsAlarmName:
-    Description: Name of the unhealthy hosts alarm
+  NoHealthyTargetsAlarmName:
+    Description: Name of the no healthy targets alarm (causes 5XX)
     Value: !Ref ALBUnHealthyHostsAlarm

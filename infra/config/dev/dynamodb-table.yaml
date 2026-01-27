@@ -3,6 +3,7 @@ template:
   type: file
 
 parameters:
+  # Table Configuration
   TableName: my-table
   BillingMode: PAY_PER_REQUEST
   ReadCapacityUnits: 5
@@ -11,12 +12,32 @@ parameters:
   PartitionKeyType: S
   SortKeyName: sk
   SortKeyType: S
+  
+  # Security & Recovery
   EnablePointInTimeRecovery: 'true'
   EnableDeletionProtection: 'false'
   SSEEnabled: 'true'
   KmsKeyArn: ''
-  BackupVaultName: cw-alerts-backup-vault
-  BackupPlanScheduleExpression: cron(0 5 * * ? *)
-  BackupRetentionDays: 35
+  
+  # AWS Backup Configuration
+  EnableAWSBackup: 'true'
+  BackupVaultName: dynamodb-backup-vault
+  
+  # Backup Schedules & Retention
+  DailyBackupSchedule: cron(0 2 * * ? *)
+  DailyBackupRetentionDays: 7
+  
+  WeeklyBackupSchedule: cron(0 3 ? * SUN *)
+  WeeklyBackupRetentionDays: 35
+  
+  MonthlyBackupSchedule: cron(0 4 1 * ? *)
+  MonthlyBackupRetentionDays: 365
+  
+  # Cross-Region Backup (Disaster Recovery)
+  EnableCrossRegionBackup: 'false'
+  CrossRegionBackupRegion: us-east-1
+  CrossRegionRetentionDays: 90
+  
+  # Backup Windows
   BackupStartWindowMinutes: 60
   BackupCompletionWindowMinutes: 360

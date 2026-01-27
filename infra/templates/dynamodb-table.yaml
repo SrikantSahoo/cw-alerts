@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'DynamoDB table with built-in point-in-time recovery (PITR) and optional on-demand backups'
+Description: 'Enterprise-grade DynamoDB table with PITR, AWS Backup, cross-region copies, and long-term retention'
 
 Parameters:
   TableName:
@@ -67,6 +67,258 @@ Parameters:
     Type: String
     Default: ''
     Description: Optional KMS key ARN for encryption and backup vault
+
+  # AWS Backup Configuration
+  EnableAWSBackup:
+    Type: String
+    Default: 'true'
+  UseAWSBackup: !Equals [!Ref EnableAWSBackup, 'true']
+  UseCrossRegion: !And
+    - !Equals [!Ref EnableAWSBackup, 'true']
+    - !Equals [!Ref EnableCrossRegionBackup, 'true']
+    AllowedValues: ['true', 'false']
+    Description: Enable AWS Backup in addition to PITR
+
+  BackupVaultName:
+    Type: String
+    Default: dynamodb-backup-vault
+    Description: Name of the primary backup vault
+
+  # Short-term backup (daily)
+  DailyBackupSchedule:
+    Type: String
+    Default: cron(0 2 * * ? *)
+    Description: Daily backup schedule (02:00 UTC)
+
+  DailyBackupRetentionDays:
+    Type: Number
+    Default: 7
+    Description: Retention for daily backups (7 days)
+
+  # Weekly backup
+  WeeklyBackupSchedule:
+    Type: String
+    Default: cron(0 3 ? * SUN *)
+    Description: Weekly backup schedule (Sunday 03:00 UTC)
+
+  WeeklyBackupRetentionDays:
+    Type: Number
+  # Primary Backup Vault
+  PrimaryBackupVault:
+    Type: AWS::Backup::BackupVault
+    Condition: UseAWSBackup
+    Properties:
+      BackupVaultName: !Ref BackupVaultName
+      EncryptionKeyArn: !If [UseKms, !Ref KmsKeyArn, !Ref 'AWS::NoValue']
+      Notifications:
+        BackupVaultEvents:
+          - BACKUP_JOB_STARTED
+          - BACKUP_JOB_COMPLETED
+          - BACKUP_JOB_FAILED
+          - RESTORE_JOB_COMPLETED
+          - RESTORE_JOB_FAILED
+        SNSTopicArn: !Ref BackupNotificationTopic
+
+  # SNS Topic for Backup Notifications
+  BackupNotificationTopic:
+    Type: AWS::SNS::Topic
+    Condition: UseAWSBackup
+    Properties:
+      DisplayName: DynamoDB Backup Notifications
+      TopicName: !Sub '${TableName}-backup-notifications'
+
+  # Backup Role
+  BackupRole:
+    Type: AWS::IAM::Role
+    Condition: UseAWSBackup
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: backup.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForBackup
+        - arn:aws:iam::aws:policy/service-role/AWSBackupServiceRolePolicyForRestores
+      Policies:
+        - PolicyName: DynamoDBBackupPolicy
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action:
+                  - dynamodb:CreateBackup
+                  - dynamodb:DeleteBackup
+                  - dynamodb:DescribeBackup
+                  - dynamodb:DescribeContinuousBackups
+                  - dynamodb:DescribeTable
+                  - dynamodb:ListBackups
+                  - dynamodb:ListTables
+                  - dynamodb:ListTagsOfResource
+                  - dynamodb:TagResource
+                  - dynamodb:UntagResource
+                Resource: !GetAtt DynamoTable.Arn
+              - !If
+                - UseKms
+                - Effect: Allow
+                  Action:
+                    - kms:CreateGrant
+                    - kms:DescribeKey
+                    - kms:GenerateDataKey*
+                    - kms:Encrypt
+                    - kms:Decrypt
+                    - kms:ReEncrypt*
+                    - kms:ListGrants
+                  Resource: !Ref KmsKeyArn
+                - !Ref 'AWS::NoValue'
+
+  # Backup Plan with Multiple Rules
+  BackupPlan:
+    Type: AWS::Backup::BackupPlan
+    Condition: UseAWSBackup
+    Properties:
+    Export:
+      Name: !Sub '${AWS::StackName}-TableName'
+
+  TableArn:
+    Description: DynamoDB table ARN
+    Value: !GetAtt DynamoTable.Arn
+    Export:
+      Name: !Sub '${AWS::StackName}-TableArn'
+
+  BackupVaultName:
+    Condition: UseAWSBackup
+    Description: Primary backup vault name
+    Value: !Ref PrimaryBackupVault
+
+  BackupPlanId:
+    Condition: UseAWSBackup
+    Description: Backup plan ID
+    Value: !Ref BackupPlan
+
+  BackupNotificationTopicArn:
+    Condition: UseAWSBackup
+    Description: SNS topic for backup notifications
+    Value: !Ref BackupNotificationTopic
+    Export:
+      Name: !Sub '${AWS::StackName}-BackupTopicArn
+          - RuleName: DailyBackup
+            TargetBackupVault: !Ref PrimaryBackupVault
+            ScheduleExpression: !Ref DailyBackupSchedule
+            StartWindowMinutes: !Ref BackupStartWindowMinutes
+            CompletionWindowMinutes: !Ref BackupCompletionWindowMinutes
+            Lifecycle:
+              DeleteAfterDays: !Ref DailyBackupRetentionDays
+            RecoveryPointTags:
+              Frequency: Daily
+              TableName: !Ref TableName
+          
+          # Weekly Backup Rule
+          - RuleName: WeeklyBackup
+            TargetBackupVault: !Ref PrimaryBackupVault
+            ScheduleExpression: !Ref WeeklyBackupSchedule
+            StartWindowMinutes: !Ref BackupStartWindowMinutes
+            CompletionWindowMinutes: !Ref BackupCompletionWindowMinutes
+            Lifecycle:
+              DeleteAfterDays: !Ref WeeklyBackupRetentionDays
+            RecoveryPointTags:
+              Frequency: Weekly
+              TableName: !Ref TableName
+          
+          # Monthly Backup Rule (Long-term)
+          - RuleName: MonthlyBackup
+            TargetBackupVault: !Ref PrimaryBackupVault
+            ScheduleExpression: !Ref MonthlyBackupSchedule
+            StartWindowMinutes: !Ref BackupStartWindowMinutes
+            CompletionWindowMinutes: !Ref BackupCompletionWindowMinutes
+            Lifecycle:
+              DeleteAfterDays: !Ref MonthlyBackupRetentionDays
+            RecoveryPointTags:
+              Frequency: Monthly
+              TableName: !Ref TableName
+              LongTerm: 'true'
+            CopyActions: !If
+              - UseCrossRegion
+              - - DestinationBackupVaultArn: !Sub 'arn:${AWS::Partition}:backup:${CrossRegionBackupRegion}:${AWS::AccountId}:backup-vault:${BackupVaultName}-dr'
+                  Lifecycle:
+                    DeleteAfterDays: !Ref CrossRegionRetentionDays
+              - !Ref 'AWS::NoValue'
+
+  # Backup Selection
+  BackupSelection:
+    Type: AWS::Backup::BackupSelection
+    Condition: UseAWSBackup
+    Properties:
+      BackupPlanId: !Ref BackupPlan
+      BackupSelection:
+        SelectionName: !Sub '${TableName}-selection'
+        IamRoleArn: !GetAtt BackupRole.Arn
+        Resources:
+          - !GetAtt DynamoTable.Arn
+
+  # CloudWatch Alarm for Failed Backups
+  BackupFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: UseAWSBackup
+    Properties:
+      AlarmName: !Sub '${TableName}-Backup-Failures'
+      AlarmDescription: Alert when DynamoDB backup jobs fail
+      Namespace: AWS/Backup
+      MetricName: NumberOfBackupJobsFailed
+      Dimensions:
+        - Name: ResourceType
+          Value: DynamoDB
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      AlarmActions:
+        - !Ref BackupNotificationTopic
+      TreatMissingData: notBreaching
+
+    Default: 35
+    Description: Retention for weekly backups (35 days)
+
+  # Monthly backup (long-term)
+  MonthlyBackupSchedule:
+    Type: String
+    Default: cron(0 4 1 * ? *)
+    Description: Monthly backup schedule (1st of month 04:00 UTC)
+
+  MonthlyBackupRetentionDays:
+    Type: Number
+    Default: 365
+    Description: Retention for monthly backups (1 year)
+
+  # Cross-region backup
+  EnableCrossRegionBackup:
+    Type: String
+    Default: 'false'
+    AllowedValues: ['true', 'false']
+    Description: Enable cross-region backup copies
+
+  CrossRegionBackupRegion:
+    Type: String
+    Default: us-east-1
+    Description: Destination region for cross-region backups
+
+  CrossRegionRetentionDays:
+    Type: Number
+    Default: 90
+    Description: Retention for cross-region backups
+
+  BackupStartWindowMinutes:
+    Type: Number
+    Default: 60
+    Description: Backup start window in minutes
+
+  BackupCompletionWindowMinutes:
+    Type: Number
+    Default: 360
+    Description: Backup completion window in minutes (6 hours)
 
 Conditions:
   HasSortKey: !Not [!Equals [!Ref SortKeyName, '']]

@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'CloudWatch Alarms for SQS Queues'
+Description: 'CloudWatch Alarms for SQS - Service Impact & Processing Failures (5XX equivalent)'
 
 Parameters:
   QueueName:
@@ -21,8 +21,8 @@ Resources:
   SQSDeadLetterQueueAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'SQS-${QueueName}-DeadLetter-Messages-High'
-      AlarmDescription: Alert when messages are sent to DLQ (indicates 5XX/processing errors)
+      AlarmName: !Sub 'SQS-${QueueName}-DLQ-Processing-Failures'
+      AlarmDescription: CRITICAL - Messages in DLQ indicate service processing failures (5XX equivalent)
       MetricName: ApproximateNumberOfMessagesVisible
       Namespace: AWS/SQS
       Statistic: Average
@@ -40,18 +40,20 @@ Resources:
         - Key: Service
           Value: SQS
         - Key: AlertType
-          Value: DLQ-Messages
+          Value: Processing-Failure
+        - Key: Severity
+          Value: Critical
 
   SQSQueueDepthAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'SQS-${QueueName}-Queue-Depth-High'
-      AlarmDescription: Alert when queue depth is high (indicates processing issues)
+      AlarmName: !Sub 'SQS-${QueueName}-Consumer-Failure-Backlog'
+      AlarmDescription: HIGH - Queue backlog indicates consumer service failures or degradation
       MetricName: ApproximateNumberOfMessagesVisible
       Namespace: AWS/SQS
       Statistic: Average
       Period: 300
-      EvaluationPeriods: 2
+      EvaluationPeriods: 3
       Threshold: 1000
       ComparisonOperator: GreaterThanThreshold
       Dimensions:
@@ -64,19 +66,21 @@ Resources:
         - Key: Service
           Value: SQS
         - Key: AlertType
-          Value: Queue-Depth
+          Value: Consumer-Failure
+        - Key: Severity
+          Value: High
 
   SQSOldestMessageAgeAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'SQS-${QueueName}-Oldest-Message-Age-High'
-      AlarmDescription: Alert when messages are stuck in queue
+      AlarmName: !Sub 'SQS-${QueueName}-Processing-Stalled'
+      AlarmDescription: HIGH - Messages not processing indicates service outage or severe degradation
       MetricName: ApproximateAgeOfOldestMessage
       Namespace: AWS/SQS
       Statistic: Maximum
       Period: 300
       EvaluationPeriods: 2
-      Threshold: 3600
+      Threshold: 1800
       ComparisonOperator: GreaterThanThreshold
       Dimensions:
         - Name: QueueName
@@ -88,38 +92,16 @@ Resources:
         - Key: Service
           Value: SQS
         - Key: AlertType
-          Value: Message-Age
+          Value: Service-Stalled
+        - Key: Severity
+          Value: High
 
-  SQSNumberOfMessagesSentAlarm:
+  SQSConsumerFailureAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'SQS-${QueueName}-Messages-Sent-Spike'
-      AlarmDescription: Alert when unexpected spike in messages sent (potential issue)
-      MetricName: NumberOfMessagesSent
-      Namespace: AWS/SQS
-      Statistic: Sum
-      Period: 300
-      EvaluationPeriods: 1
-      Threshold: 10000
-      ComparisonOperator: GreaterThanThreshold
-      Dimensions:
-        - Name: QueueName
-          Value: !Ref QueueName
-      AlarmActions:
-        - !Ref SnsTopicArn
-      TreatMissingData: notBreaching
-      Tags:
-        - Key: Service
-          Value: SQS
-        - Key: AlertType
-          Value: Message-Spike
-
-  SQSNumberOfMessagesDeletedAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub 'SQS-${QueueName}-Messages-Deleted-Low'
-      AlarmDescription: Alert when message deletion rate drops significantly
-      MetricName: NumberOfMessagesDeleted
+      AlarmName: !Sub 'SQS-${QueueName}-Consumer-Service-Down'
+      AlarmDescription: CRITICAL - Consumer service stopped receiving messages (service outage)
+      MetricName: NumberOfMessagesReceived
       Namespace: AWS/SQS
       Statistic: Sum
       Period: 300
@@ -131,30 +113,28 @@ Resources:
           Value: !Ref QueueName
       AlarmActions:
         - !Ref SnsTopicArn
-      TreatMissingData: notBreaching
+      TreatMissingData: breaching
       Tags:
         - Key: Service
           Value: SQS
         - Key: AlertType
-          Value: Processing-Failure
+          Value: Consumer-Outage
+        - Key: Severity
+          Value: Critical
 
 Outputs:
-  DeadLetterQueueAlarmName:
-    Description: Name of the DLQ alarm
+  DLQProcessingFailuresAlarmName:
+    Description: Name of the DLQ processing failures alarm (5XX equivalent)
     Value: !Ref SQSDeadLetterQueueAlarm
 
-  QueueDepthAlarmName:
-    Description: Name of the queue depth alarm
+  ConsumerFailureBacklogAlarmName:
+    Description: Name of the consumer failure backlog alarm
     Value: !Ref SQSQueueDepthAlarm
 
-  OldestMessageAgeAlarmName:
-    Description: Name of the oldest message age alarm
+  ProcessingStalledAlarmName:
+    Description: Name of the processing stalled alarm
     Value: !Ref SQSOldestMessageAgeAlarm
 
-  NumberOfMessagesSentAlarmName:
-    Description: Name of the messages sent alarm
-    Value: !Ref SQSNumberOfMessagesSentAlarm
-
-  NumberOfMessagesDeletedAlarmName:
-    Description: Name of the messages deleted alarm
-    Value: !Ref SQSNumberOfMessagesDeletedAlarm
+  ConsumerServiceDownAlarmName:
+    Description: Name of the consumer service down alarm
+    Value: !Ref SQSConsumerFailureAlarm

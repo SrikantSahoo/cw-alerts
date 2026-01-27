@@ -1,5 +1,5 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'CloudWatch Alarms for ECS Services, Tasks, and Containers'
+Description: 'CloudWatch Alarms for ECS - Critical Service Failures (5XX equivalent)'
 
 Parameters:
   ClusterName:
@@ -21,17 +21,45 @@ Parameters:
     Description: SNS Topic ARN for notifications
 
 Resources:
-  ECSTaskFailedAlarm:
+  ECSServiceDownAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub 'ECS-${ClusterName}-${ServiceName}-Task-Failed'
-      AlarmDescription: Alert when ECS tasks fail or stop unexpectedly
+      AlarmName: !Sub 'ECS-${ClusterName}-${ServiceName}-Service-Down'
+      AlarmDescription: CRITICAL - ECS service has no running tasks (complete service outage)
+      MetricName: RunningCount
+      Namespace: ECS/ContainerInsights
+      Statistic: Average
+      Period: 60
+      EvaluationPeriods: 2
+      Threshold: 1
+      ComparisonOperator: LessThanThreshold
+      Dimensions:
+        - Name: ClusterName
+          Value: !Ref ClusterName
+        - Name: ServiceName
+          Value: !Ref ServiceName
+      AlarmActions:
+        - !Ref SnsTopicArn
+      TreatMissingData: breaching
+      Tags:
+        - Key: Service
+          Value: ECS
+        - Key: AlertType
+          Value: Service-Outage
+        - Key: Severity
+          Value: Critical
+
+  ECSTaskFailuresAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub 'ECS-${ClusterName}-${ServiceName}-Task-Crash-Loop'
+      AlarmDescription: HIGH - Tasks repeatedly failing indicates application crashes or misconfigurations
       MetricName: RunningCount
       Namespace: ECS/ContainerInsights
       Statistic: Average
       Period: 300
-      EvaluationPeriods: 1
-      Threshold: 1
+      EvaluationPeriods: 3
+      Threshold: 0.5
       ComparisonOperator: LessThanThreshold
       Dimensions:
         - Name: ClusterName
@@ -45,91 +73,15 @@ Resources:
         - Key: Service
           Value: ECS
         - Key: AlertType
-          Value: Task-Failure
-
-  ECSContainerCPUHighAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub 'ECS-${ClusterName}-${ServiceName}-High-CPU'
-      AlarmDescription: Alert when container CPU usage is high (may cause 5XX errors)
-      MetricName: ContainerInstanceCpuUtilization
-      Namespace: ECS/ContainerInsights
-      Statistic: Average
-      Period: 300
-      EvaluationPeriods: 2
-      Threshold: 85
-      ComparisonOperator: GreaterThanThreshold
-      Dimensions:
-        - Name: ClusterName
-          Value: !Ref ClusterName
-        - Name: ServiceName
-          Value: !Ref ServiceName
-      AlarmActions:
-        - !Ref SnsTopicArn
-      TreatMissingData: notBreaching
-      Tags:
-        - Key: Service
-          Value: ECS
-        - Key: AlertType
-          Value: Resource-Capacity
-
-  ECSContainerMemoryHighAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub 'ECS-${ClusterName}-${ServiceName}-High-Memory'
-      AlarmDescription: Alert when container memory usage is high (may cause 5XX errors)
-      MetricName: ContainerInstanceMemoryUtilization
-      Namespace: ECS/ContainerInsights
-      Statistic: Average
-      Period: 300
-      EvaluationPeriods: 2
-      Threshold: 85
-      ComparisonOperator: GreaterThanThreshold
-      Dimensions:
-        - Name: ClusterName
-          Value: !Ref ClusterName
-        - Name: ServiceName
-          Value: !Ref ServiceName
-      AlarmActions:
-        - !Ref SnsTopicArn
-      TreatMissingData: notBreaching
-      Tags:
-        - Key: Service
-          Value: ECS
-        - Key: AlertType
-          Value: Resource-Capacity
-
-  ECSServiceUnhealthyAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub 'ECS-${ClusterName}-${ServiceName}-Unhealthy-Tasks'
-      AlarmDescription: Alert when ECS service has unhealthy tasks
-      MetricName: HealthyTaskCount
-      Namespace: ECS/ContainerInsights
-      Statistic: Average
-      Period: 300
-      EvaluationPeriods: 1
-      Threshold: 1
-      ComparisonOperator: LessThanThreshold
-      Dimensions:
-        - Name: ClusterName
-          Value: !Ref ClusterName
-        - Name: ServiceName
-          Value: !Ref ServiceName
-      AlarmActions:
-        - !Ref SnsTopicArn
-      TreatMissingData: notBreaching
-      Tags:
-        - Key: Service
-          Value: ECS
-        - Key: AlertType
-          Value: Health-Check
+          Value: Task-Crash-Loop
+        - Key: Severity
+          Value: High
 
   ECSApplicationErrorsAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
       AlarmName: !Sub 'ECS-${ClusterName}-${ServiceName}-Application-Errors'
-      AlarmDescription: Alert on application errors in container logs
+      AlarmDescription: CRITICAL - Application errors in container logs indicate service failures (5XX equivalent)
       MetricName: Errors
       Namespace: Custom/ECS
       Statistic: Sum
@@ -150,52 +102,20 @@ Resources:
           Value: ECS
         - Key: AlertType
           Value: Application-Errors
-
-  ECSTaskCountAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub 'ECS-${ClusterName}-${ServiceName}-Task-Count-Low'
-      AlarmDescription: Alert when running task count is lower than desired
-      MetricName: RunningCount
-      Namespace: ECS/ContainerInsights
-      Statistic: Average
-      Period: 60
-      EvaluationPeriods: 2
-      Threshold: 1
-      ComparisonOperator: LessThanThreshold
-      Dimensions:
-        - Name: ClusterName
-          Value: !Ref ClusterName
-        - Name: ServiceName
-          Value: !Ref ServiceName
-      AlarmActions:
-        - !Ref SnsTopicArn
-      TreatMissingData: notBreaching
-      Tags:
-        - Key: Service
-          Value: ECS
-        - Key: AlertType
-          Value: Scaling
+        - Key: Severity
+          Value: Critical
 
 Outputs:
-  TaskFailedAlarmName:
-    Description: Name of the task failed alarm
-    Value: !Ref ECSTaskFailedAlarm
+  ServiceDownAlarmName:
+    Description: Name of the service down alarm (complete outage)
+    Value: !Ref ECSServiceDownAlarm
 
-  ContainerCPUHighAlarmName:
-    Description: Name of the high CPU alarm
-    Value: !Ref ECSContainerCPUHighAlarm
-
-  ContainerMemoryHighAlarmName:
-    Description: Name of the high memory alarm
-    Value: !Ref ECSContainerMemoryHighAlarm
-
-  ServiceUnhealthyAlarmName:
-    Description: Name of the unhealthy tasks alarm
-    Value: !Ref ECSServiceUnhealthyAlarm
+  TaskCrashLoopAlarmName:
+    Description: Name of the task crash loop alarm
+    Value: !Ref ECSTaskFailuresAlarm
 
   ApplicationErrorsAlarmName:
-    Description: Name of the application errors alarm
+    Description: Name of the application errors alarm (5XX equivalent)
     Value: !Ref ECSApplicationErrorsAlarm
 
   TaskCountAlarmName:
