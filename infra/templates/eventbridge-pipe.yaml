@@ -106,6 +106,34 @@ Parameters:
       (Optional) ARN of an SQS queue to use as the Pipe's Dead-Letter Queue.
       Leave empty to skip DLQ configuration.
 
+  # --- Pipe Logging ---
+  PipeLogLevel:
+    Type: String
+    Default: ERROR
+    AllowedValues: [OFF, ERROR, INFO, TRACE]
+    Description: >
+      Verbosity of EventBridge Pipe execution logs written to CloudWatch.
+      OFF   - no logs.
+      ERROR - only failed executions (recommended for production).
+      INFO  - successful and failed executions.
+      TRACE - full event payload at every stage (useful for debugging;
+              avoid in production as it may log sensitive data).
+
+  PipeLogRetentionDays:
+    Type: Number
+    Default: 30
+    AllowedValues: [1, 3, 5, 7, 14, 30, 60, 90, 120, 150, 180, 365, 400, 545, 731, 1096, 1827, 2192, 2557, 2922, 3288, 3653]
+    Description: Number of days to retain pipe execution logs in CloudWatch.
+
+  PipeLogIncludeExecutionData:
+    Type: String
+    Default: "false"
+    AllowedValues: ["true", "false"]
+    Description: >
+      When true, the full event payload is included in each log entry.
+      Only enable for TRACE-level debugging; may expose sensitive data
+      and increase log storage costs.
+
   # --- Tagging ---
   Environment:
     Type: String
@@ -122,6 +150,8 @@ Parameters:
 # ---------------------------------------------------------------------------
 Conditions:
   HasPipeDLQ: !Not [!Equals [!Ref PipeDLQArn, ""]]
+  PipeLoggingEnabled: !Not [!Equals [!Ref PipeLogLevel, "OFF"]]
+  IncludeExecData: !Equals [!Ref PipeLogIncludeExecutionData, "true"]
 
 # ---------------------------------------------------------------------------
 # Resources
@@ -169,6 +199,24 @@ Resources:
                   - events:PutEvents
                 Resource: !GetAtt CustomEventBus.Arn
 
+
+        - PolicyName: CloudWatchLogsWrite
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: CreateLogDelivery
+                Effect: Allow
+                Action:
+                  - logs:CreateLogDelivery
+                  - logs:DeleteLogDelivery
+                  - logs:UpdateLogDelivery
+                  - logs:GetLogDelivery
+                  - logs:ListLogDeliveries
+                  - logs:PutLogEvents
+                  - logs:PutResourcePolicy
+                  - logs:DescribeResourcePolicies
+                  - logs:DescribeLogGroups
+                Resource: "*"
         - PolicyName: PipeDLQAccess
           PolicyDocument:
             Version: "2012-10-17"
@@ -277,6 +325,25 @@ Resources:
                 aws:SourceArn: !GetAtt EventBusToSQSRule.Arn
 
   # -------------------------------------------------------------------------
+  # CloudWatch Log Group – EventBridge Pipe execution logs
+  # -------------------------------------------------------------------------
+  PipeLogGroup:
+    Type: AWS::Logs::LogGroup
+    Condition: PipeLoggingEnabled
+    DeletionPolicy: Retain
+    UpdateReplacePolicy: Retain
+    Properties:
+      LogGroupName: !Sub "/aws/pipes/${Application}-${Environment}-dynamodb-to-eventbus-pipe"
+      RetentionInDays: !Ref PipeLogRetentionDays
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: !Ref Application
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # -------------------------------------------------------------------------
   # EventBridge Pipe
   # -------------------------------------------------------------------------
   DynamoDBToEventBusPipe:
@@ -327,6 +394,18 @@ Resources:
           DetailType: !Ref EventDetailType
           Source: !Ref EventSource
           # EndpointId: ""   # Uncomment for global endpoints
+
+      # --- Log Configuration ---
+      LogConfiguration: !If
+        - PipeLoggingEnabled
+        - Level: !Ref PipeLogLevel
+          IncludeExecutionData: !If
+            - IncludeExecData
+            - - ALL
+            - !Ref AWS::NoValue
+          CloudwatchLogsLogDestination:
+            LogGroupArn: !GetAtt PipeLogGroup.Arn
+        - !Ref AWS::NoValue
 
       Tags:
         Environment: !Ref Environment
@@ -423,6 +502,40 @@ Resources:
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
 
+
+  # -------------------------------------------------------------------------
+  # CloudWatch Metric Filter + Alarm – Pipe log-level ERRORs
+  # -------------------------------------------------------------------------
+  PipeLogErrorMetricFilter:
+    Type: AWS::Logs::MetricFilter
+    Condition: PipeLoggingEnabled
+    Properties:
+      LogGroupName: !Ref PipeLogGroup
+      FilterPattern: '{ $.level = "ERROR" }'
+      MetricTransformations:
+        - MetricNamespace: !Sub "${Application}/${Environment}/Pipes"
+          MetricName: PipeLogErrors
+          MetricValue: "1"
+          DefaultValue: 0
+          Unit: Count
+
+  PipeLogErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Condition: PipeLoggingEnabled
+    Properties:
+      AlarmName: !Sub "${Application}-${Environment}-pipe-log-errors"
+      AlarmDescription: >
+        Triggers when ERROR-level entries appear in the pipe's CloudWatch
+        log group. Indicates processing failures worth investigating.
+      Namespace: !Sub "${Application}/${Environment}/Pipes"
+      MetricName: PipeLogErrors
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
 # ---------------------------------------------------------------------------
 # Outputs
 # ---------------------------------------------------------------------------
@@ -439,6 +552,21 @@ Outputs:
     Value: !GetAtt CustomEventBus.Arn
     Export:
       Name: !Sub "${Application}-${Environment}-EventBusArn"
+
+
+  PipeLogGroupName:
+    Description: CloudWatch Log Group name for pipe execution logs
+    Condition: PipeLoggingEnabled
+    Value: !Ref PipeLogGroup
+    Export:
+      Name: !Sub "${Application}-${Environment}-PipeLogGroupName"
+
+  PipeLogGroupArn:
+    Description: CloudWatch Log Group ARN for pipe execution logs
+    Condition: PipeLoggingEnabled
+    Value: !GetAtt PipeLogGroup.Arn
+    Export:
+      Name: !Sub "${Application}-${Environment}-PipeLogGroupArn"
 
   PipeName:
     Description: Name of the EventBridge Pipe
