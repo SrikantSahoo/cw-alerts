@@ -3,7 +3,7 @@ Description: >
   Production-ready EventBridge Pipe:
   Source  → DynamoDB Stream (existing table)
   Filter  → EventBridge Pipe source filter
-  Target  → EventBridge Event Bus (existing)
+  Target  → NEW EventBridge Custom Event Bus (created by this stack)
   Rule    → Routes matching events to an existing SQS queue
 
 # ---------------------------------------------------------------------------
@@ -69,12 +69,13 @@ Parameters:
       JSON array of filter patterns applied to the DynamoDB stream records
       BEFORE they reach the event bus. Use [] for no filtering.
 
-  # --- EventBridge Event Bus ---
+  # --- EventBridge Event Bus (NEW – created by this stack) ---
   EventBusName:
     Type: String
     Description: >
-      Name OR ARN of the existing EventBridge Event Bus that will receive
-      the enriched/filtered DynamoDB events.
+      Name for the NEW custom EventBridge Event Bus that will be created
+      by this stack. Must be unique within the account/region.
+      (Cannot be "default".)
 
   EventDetailType:
     Type: String
@@ -93,7 +94,9 @@ Parameters:
 
   TargetSQSQueueUrl:
     Type: String
-    Description: URL of the existing SQS queue (needed for the DLQ policy).
+    Description: >
+      URL of the existing SQS queue. Required to attach the resource-based
+      policy that allows EventBridge to send messages to it.
 
   # --- Dead-Letter Queue for the Pipe ---
   PipeDLQArn:
@@ -164,7 +167,7 @@ Resources:
                 Effect: Allow
                 Action:
                   - events:PutEvents
-                Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${EventBusName}"
+                Resource: !GetAtt CustomEventBus.Arn
 
         - PolicyName: PipeDLQAccess
           PolicyDocument:
@@ -224,6 +227,56 @@ Resources:
           Value: CloudFormation
 
   # -------------------------------------------------------------------------
+  # Custom EventBridge Event Bus (NEW)
+  # -------------------------------------------------------------------------
+  CustomEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !Ref EventBusName
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: !Ref Application
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # Resource-based policy on the new bus – restrict PutEvents to this account
+  # only. Expand the Principal block to allow cross-account access if needed.
+  CustomEventBusPolicy:
+    Type: AWS::Events::EventBusPolicy
+    Properties:
+      EventBusName: !Ref CustomEventBus
+      StatementId: AllowAccountPutEvents
+      Action: events:PutEvents
+      Principal: !Ref AWS::AccountId
+
+  # -------------------------------------------------------------------------
+  # SQS Queue Policy – allow EventBridge rule to send messages
+  # -------------------------------------------------------------------------
+  # NOTE: This policy is ADDITIVE. If the queue already has a resource policy,
+  # CloudFormation will REPLACE it with this one. Remove this resource and
+  # manage the queue policy outside this stack if that would be a problem.
+  SQSQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    DependsOn: EventBusToSQSRule
+    Properties:
+      Queues:
+        - !Ref TargetSQSQueueUrl
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowEventBridgeRuleSendMessage
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sqs:SendMessage
+            Resource: !Ref TargetSQSQueueArn
+            Condition:
+              ArnEquals:
+                aws:SourceArn: !GetAtt EventBusToSQSRule.Arn
+
+  # -------------------------------------------------------------------------
   # EventBridge Pipe
   # -------------------------------------------------------------------------
   DynamoDBToEventBusPipe:
@@ -232,7 +285,7 @@ Resources:
       Name: !Sub "${Application}-${Environment}-dynamodb-to-eventbus-pipe"
       Description: !Sub >-
         Reads DynamoDB stream for ${DynamoDBTableName}, filters records,
-        and publishes to the ${EventBusName} event bus.
+        and publishes to the new ${EventBusName} custom event bus.
       RoleArn: !GetAtt PipeExecutionRole.Arn
       DesiredState: RUNNING
 
@@ -267,8 +320,8 @@ Resources:
       # --- No enrichment (Lambda/Step Functions) – add here if needed ---
       # Enrichment: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:my-enrichment-fn"
 
-      # --- Target: Event Bus ---
-      Target: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${EventBusName}"
+      # --- Target: New Custom Event Bus ---
+      Target: !GetAtt CustomEventBus.Arn
       TargetParameters:
         EventBridgeEventBusParameters:
           DetailType: !Ref EventDetailType
@@ -288,9 +341,9 @@ Resources:
     Properties:
       Name: !Sub "${Application}-${Environment}-dynamodb-events-to-sqs"
       Description: !Sub >-
-        Routes ${EventDetailType} events from ${EventBusName} bus to the
-        target SQS queue.
-      EventBusName: !Ref EventBusName
+        Routes ${EventDetailType} events from the new ${EventBusName} bus
+        to the target SQS queue.
+      EventBusName: !Ref CustomEventBus
       State: ENABLED
 
       # Match events published by the pipe above
@@ -374,6 +427,18 @@ Resources:
 # Outputs
 # ---------------------------------------------------------------------------
 Outputs:
+
+  EventBusName:
+    Description: Name of the newly created custom EventBridge Event Bus
+    Value: !Ref CustomEventBus
+    Export:
+      Name: !Sub "${Application}-${Environment}-EventBusName"
+
+  EventBusArn:
+    Description: ARN of the newly created custom EventBridge Event Bus
+    Value: !GetAtt CustomEventBus.Arn
+    Export:
+      Name: !Sub "${Application}-${Environment}-EventBusArn"
 
   PipeName:
     Description: Name of the EventBridge Pipe
