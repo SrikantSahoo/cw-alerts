@@ -1,0 +1,408 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >
+  Production-ready EventBridge Pipe:
+  Source  → DynamoDB Stream (existing table)
+  Filter  → EventBridge Pipe source filter
+  Target  → EventBridge Event Bus (existing)
+  Rule    → Routes matching events to an existing SQS queue
+
+# ---------------------------------------------------------------------------
+# Parameters
+# ---------------------------------------------------------------------------
+Parameters:
+
+  # --- Source (DynamoDB) ---
+  DynamoDBTableName:
+    Type: String
+    Description: Name of the existing DynamoDB table (must have Streams enabled).
+
+  DynamoDBStreamArn:
+    Type: String
+    Description: ARN of the DynamoDB Stream on the existing table.
+
+  DynamoDBStartingPosition:
+    Type: String
+    Default: LATEST
+    AllowedValues: [TRIM_HORIZON, LATEST]
+    Description: Where in the stream to start reading.
+
+  DynamoDBBatchSize:
+    Type: Number
+    Default: 10
+    MinValue: 1
+    MaxValue: 1000
+    Description: Maximum number of records per batch sent to the pipe.
+
+  DynamoDBMaximumBatchingWindowSeconds:
+    Type: Number
+    Default: 5
+    MinValue: 0
+    MaxValue: 300
+    Description: >
+      How long (seconds) EventBridge Pipes will wait to accumulate records
+      before invoking the target (tumbling window). 0 disables batching.
+
+  DynamoDBMaximumRetryAttempts:
+    Type: Number
+    Default: 3
+    MinValue: 0
+    MaxValue: 10000
+    Description: Maximum number of retry attempts for failed batches (-1 = unlimited).
+
+  DynamoDBBisectOnError:
+    Type: String
+    Default: "true"
+    AllowedValues: ["true", "false"]
+    Description: >
+      Split a failing batch in two and retry each half independently
+      to isolate the bad record.
+
+  # --- Filter ---
+  # Provide a JSON string that is a valid EventBridge event pattern filter.
+  # Default passes only INSERT events whose NewImage contains a field
+  # "status" equal to "ACTIVE". Adjust or leave as "[]" for no filter.
+  SourceFilterPattern:
+    Type: String
+    Default: >-
+      [{"eventName": ["INSERT", "MODIFY"], "dynamodb": {"NewImage": {"status": {"S": ["ACTIVE"]}}}}]
+    Description: >
+      JSON array of filter patterns applied to the DynamoDB stream records
+      BEFORE they reach the event bus. Use [] for no filtering.
+
+  # --- EventBridge Event Bus ---
+  EventBusName:
+    Type: String
+    Description: >
+      Name OR ARN of the existing EventBridge Event Bus that will receive
+      the enriched/filtered DynamoDB events.
+
+  EventDetailType:
+    Type: String
+    Default: DynamoDBStreamRecord
+    Description: The detail-type value stamped on events sent to the bus.
+
+  EventSource:
+    Type: String
+    Default: com.mycompany.dynamodb
+    Description: The source value stamped on events sent to the bus.
+
+  # --- SQS (target of the Event Bus rule) ---
+  TargetSQSQueueArn:
+    Type: String
+    Description: ARN of the existing SQS queue that will receive matched events.
+
+  TargetSQSQueueUrl:
+    Type: String
+    Description: URL of the existing SQS queue (needed for the DLQ policy).
+
+  # --- Dead-Letter Queue for the Pipe ---
+  PipeDLQArn:
+    Type: String
+    Default: ""
+    Description: >
+      (Optional) ARN of an SQS queue to use as the Pipe's Dead-Letter Queue.
+      Leave empty to skip DLQ configuration.
+
+  # --- Tagging ---
+  Environment:
+    Type: String
+    Default: production
+    AllowedValues: [development, staging, production]
+
+  Application:
+    Type: String
+    Default: my-app
+    Description: Application name used for tagging and naming resources.
+
+# ---------------------------------------------------------------------------
+# Conditions
+# ---------------------------------------------------------------------------
+Conditions:
+  HasPipeDLQ: !Not [!Equals [!Ref PipeDLQArn, ""]]
+
+# ---------------------------------------------------------------------------
+# Resources
+# ---------------------------------------------------------------------------
+Resources:
+
+  # -------------------------------------------------------------------------
+  # IAM Role – EventBridge Pipe execution role
+  # -------------------------------------------------------------------------
+  PipeExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Application}-${Environment}-pipe-execution-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: pipes.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: DynamoDBStreamRead
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ReadDynamoDBStream
+                Effect: Allow
+                Action:
+                  - dynamodb:GetRecords
+                  - dynamodb:GetShardIterator
+                  - dynamodb:DescribeStream
+                  - dynamodb:ListStreams
+                Resource: !Ref DynamoDBStreamArn
+
+        - PolicyName: EventBusPublish
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: PutEventsOnBus
+                Effect: Allow
+                Action:
+                  - events:PutEvents
+                Resource: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${EventBusName}"
+
+        - PolicyName: PipeDLQAccess
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: SendMessageToDLQ
+                Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                # Covers both the optional DLQ (if set) and avoids empty resource list
+                Resource: !If
+                  - HasPipeDLQ
+                  - !Ref PipeDLQArn
+                  - !Sub "arn:aws:sqs:${AWS::Region}:${AWS::AccountId}:placeholder-never-used"
+
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: !Ref Application
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # -------------------------------------------------------------------------
+  # IAM Role – EventBridge Rule target role (put messages on SQS)
+  # -------------------------------------------------------------------------
+  EventRuleTargetRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub "${Application}-${Environment}-event-rule-target-role"
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+      Policies:
+        - PolicyName: SendToSQS
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: AllowSendMessage
+                Effect: Allow
+                Action:
+                  - sqs:SendMessage
+                Resource: !Ref TargetSQSQueueArn
+      Tags:
+        - Key: Environment
+          Value: !Ref Environment
+        - Key: Application
+          Value: !Ref Application
+        - Key: ManagedBy
+          Value: CloudFormation
+
+  # -------------------------------------------------------------------------
+  # EventBridge Pipe
+  # -------------------------------------------------------------------------
+  DynamoDBToEventBusPipe:
+    Type: AWS::Pipes::Pipe
+    Properties:
+      Name: !Sub "${Application}-${Environment}-dynamodb-to-eventbus-pipe"
+      Description: !Sub >-
+        Reads DynamoDB stream for ${DynamoDBTableName}, filters records,
+        and publishes to the ${EventBusName} event bus.
+      RoleArn: !GetAtt PipeExecutionRole.Arn
+      DesiredState: RUNNING
+
+      # --- Source ---
+      Source: !Ref DynamoDBStreamArn
+      SourceParameters:
+        DynamoDBStreamParameters:
+          StartingPosition: !Ref DynamoDBStartingPosition
+          BatchSize: !Ref DynamoDBBatchSize
+          MaximumBatchingWindowInSeconds: !Ref DynamoDBMaximumBatchingWindowSeconds
+          MaximumRetryAttempts: !Ref DynamoDBMaximumRetryAttempts
+          BisectBatchOnFunctionError: !Ref DynamoDBBisectOnError
+          OnPartialBatchItemFailure: AUTOMATIC_BISECT
+          DeadLetterConfig: !If
+            - HasPipeDLQ
+            - Arn: !Ref PipeDLQArn
+            - !Ref AWS::NoValue
+
+        # Pipe-level filter – applied before enrichment/target
+        FilterCriteria:
+          Filters:
+            - Pattern: !Select [0, !Split ["|||", !Join ["|||", !Split ["[", !Join ["", !Split ["]", !Ref SourceFilterPattern]]]]]]
+          # NOTE: The filter pattern above is a workaround for CloudFormation's
+          # inability to pass raw JSON inside a string parameter directly.
+          # Prefer using the FilterCriteriaOverride approach below, or deploy
+          # via CDK/SAM where you can reference the JSON natively.
+          #
+          # RECOMMENDED: Replace the Filters block with a direct JSON value
+          # if deploying via CDK, SAM, or after converting the parameter to
+          # AWS::SSM::Parameter and resolving it at deploy time.
+
+      # --- No enrichment (Lambda/Step Functions) – add here if needed ---
+      # Enrichment: !Sub "arn:aws:lambda:${AWS::Region}:${AWS::AccountId}:function:my-enrichment-fn"
+
+      # --- Target: Event Bus ---
+      Target: !Sub "arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/${EventBusName}"
+      TargetParameters:
+        EventBridgeEventBusParameters:
+          DetailType: !Ref EventDetailType
+          Source: !Ref EventSource
+          # EndpointId: ""   # Uncomment for global endpoints
+
+      Tags:
+        Environment: !Ref Environment
+        Application: !Ref Application
+        ManagedBy: CloudFormation
+
+  # -------------------------------------------------------------------------
+  # EventBridge Rule – routes events from the bus to SQS
+  # -------------------------------------------------------------------------
+  EventBusToSQSRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "${Application}-${Environment}-dynamodb-events-to-sqs"
+      Description: !Sub >-
+        Routes ${EventDetailType} events from ${EventBusName} bus to the
+        target SQS queue.
+      EventBusName: !Ref EventBusName
+      State: ENABLED
+
+      # Match events published by the pipe above
+      EventPattern:
+        source:
+          - !Ref EventSource
+        detail-type:
+          - !Ref EventDetailType
+
+      Targets:
+        - Id: TargetSQSQueue
+          Arn: !Ref TargetSQSQueueArn
+          RoleArn: !GetAtt EventRuleTargetRole.Arn
+          # Pass the full event to SQS (default).
+          # Uncomment InputTransformer below to reshape the payload.
+          # InputTransformer:
+          #   InputPathsMap:
+          #     eventName: "$.detail.eventName"
+          #     newImage: "$.detail.dynamodb.NewImage"
+          #   InputTemplate: >-
+          #     {
+          #       "eventName": "<eventName>",
+          #       "payload": <newImage>
+          #     }
+
+          # Retry policy for the rule target
+          RetryPolicy:
+            MaximumRetryAttempts: 3
+            MaximumEventAgeInSeconds: 3600
+
+          # Dead-letter queue for the rule target (reuse pipe DLQ or a separate one)
+          DeadLetterConfig: !If
+            - HasPipeDLQ
+            - Arn: !Ref PipeDLQArn
+            - !Ref AWS::NoValue
+
+  # -------------------------------------------------------------------------
+  # CloudWatch Alarm – Pipe execution failures
+  # -------------------------------------------------------------------------
+  PipeExecutionFailureAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${Application}-${Environment}-pipe-execution-failures"
+      AlarmDescription: >
+        Triggers when the EventBridge Pipe fails to process DynamoDB stream
+        records. Investigate CloudWatch Logs and the DLQ.
+      Namespace: AWS/EventBridgePipes
+      MetricName: ExecutionsFailed
+      Dimensions:
+        - Name: PipeName
+          Value: !Ref DynamoDBToEventBusPipe
+      Statistic: Sum
+      Period: 300          # 5-minute window
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  # -------------------------------------------------------------------------
+  # CloudWatch Alarm – EventBridge Rule failed invocations
+  # -------------------------------------------------------------------------
+  RuleFailedInvocationsAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "${Application}-${Environment}-rule-failed-invocations"
+      AlarmDescription: >
+        Triggers when the EventBridge Rule fails to deliver events to SQS.
+      Namespace: AWS/Events
+      MetricName: FailedInvocations
+      Dimensions:
+        - Name: RuleName
+          Value: !Ref EventBusToSQSRule
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+Outputs:
+
+  PipeName:
+    Description: Name of the EventBridge Pipe
+    Value: !Ref DynamoDBToEventBusPipe
+    Export:
+      Name: !Sub "${Application}-${Environment}-PipeName"
+
+  PipeArn:
+    Description: ARN of the EventBridge Pipe
+    Value: !GetAtt DynamoDBToEventBusPipe.Arn
+    Export:
+      Name: !Sub "${Application}-${Environment}-PipeArn"
+
+  PipeExecutionRoleArn:
+    Description: ARN of the Pipe execution IAM role
+    Value: !GetAtt PipeExecutionRole.Arn
+    Export:
+      Name: !Sub "${Application}-${Environment}-PipeExecutionRoleArn"
+
+  EventRuleArn:
+    Description: ARN of the EventBridge Rule routing events to SQS
+    Value: !GetAtt EventBusToSQSRule.Arn
+    Export:
+      Name: !Sub "${Application}-${Environment}-EventRuleArn"
+
+  PipeExecutionFailureAlarmArn:
+    Description: ARN of the CloudWatch alarm for pipe execution failures
+    Value: !GetAtt PipeExecutionFailureAlarm.Arn
+
+  RuleFailedInvocationsAlarmArn:
+    Description: ARN of the CloudWatch alarm for rule failed invocations
+    Value: !GetAtt RuleFailedInvocationsAlarm.Arn
