@@ -1,123 +1,68 @@
 AWSTemplateFormatVersion: '2010-09-09'
-Description: 'CloudWatch Alarms for ECS - Critical Service Failures (5XX equivalent)'
-
-Parameters:
-  ClusterName:
-    Type: String
-    Description: Name of the ECS cluster
-  ServiceName:
-    Type: String
-    Description: Name of the ECS service
-  AlarmThreshold:
-    Type: Number
-    Description: Threshold for 5XX errors
-    Default: 5
-  EvaluationPeriods:
-    Type: Number
-    Description: Number of periods to evaluate
-    Default: 1
-  SnsTopicArn:
-    Type: String
-    Description: SNS Topic ARN for notifications
+Description: Add EventBridge permissions to existing AWS_Deploy_Role
 
 Resources:
-  ECSServiceDownAlarm:
-    Type: AWS::CloudWatch::Alarm
+  EventBridgeInlinePolicy:
+    Type: AWS::IAM::RolePolicy
     Properties:
-      AlarmName: !Sub 'ECS-${ClusterName}-${ServiceName}-Service-Down'
-      AlarmDescription: CRITICAL - ECS service has no running tasks (complete service outage)
-      MetricName: RunningCount
-      Namespace: ECS/ContainerInsights
-      Statistic: Average
-      Period: 60
-      EvaluationPeriods: 2
-      Threshold: 1
-      ComparisonOperator: LessThanThreshold
-      Dimensions:
-        - Name: ClusterName
-          Value: !Ref ClusterName
-        - Name: ServiceName
-          Value: !Ref ServiceName
-      AlarmActions:
-        - !Ref SnsTopicArn
-      TreatMissingData: breaching
-      Tags:
-        - Key: Service
-          Value: ECS
-        - Key: AlertType
-          Value: Service-Outage
-        - Key: Severity
-          Value: Critical
+      RoleName: AWS_Deploy_Role
+      PolicyName: EventBridge-Deploy-Permissions
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: EventBusPermissions
+            Effect: Allow
+            Action:
+              - events:CreateEventBus
+              - events:DeleteEventBus
+              - events:DescribeEventBus
+              - events:ListEventBuses
+              - events:TagResource
+              - events:UntagResource
+              - events:ListTagsForResource
+            Resource:
+              - !Sub 'arn:aws:events:${AWS::Region}:${AWS::AccountId}:event-bus/*'
 
-  ECSTaskFailuresAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub 'ECS-${ClusterName}-${ServiceName}-Task-Crash-Loop'
-      AlarmDescription: HIGH - Tasks repeatedly failing indicates application crashes or misconfigurations
-      MetricName: RunningCount
-      Namespace: ECS/ContainerInsights
-      Statistic: Average
-      Period: 300
-      EvaluationPeriods: 3
-      Threshold: 0.5
-      ComparisonOperator: LessThanThreshold
-      Dimensions:
-        - Name: ClusterName
-          Value: !Ref ClusterName
-        - Name: ServiceName
-          Value: !Ref ServiceName
-      AlarmActions:
-        - !Ref SnsTopicArn
-      TreatMissingData: notBreaching
-      Tags:
-        - Key: Service
-          Value: ECS
-        - Key: AlertType
-          Value: Task-Crash-Loop
-        - Key: Severity
-          Value: High
+          - Sid: EventRulePermissions
+            Effect: Allow
+            Action:
+              - events:PutRule
+              - events:DeleteRule
+              - events:DescribeRule
+              - events:EnableRule
+              - events:DisableRule
+              - events:ListRules
+              - events:PutTargets
+              - events:RemoveTargets
+              - events:ListTargetsByRule
+              - events:TagResource
+              - events:UntagResource
+              - events:ListTagsForResource
+            Resource:
+              - !Sub 'arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/*'
+              - !Sub 'arn:aws:events:${AWS::Region}:${AWS::AccountId}:rule/*/*'
 
-  ECSApplicationErrorsAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub 'ECS-${ClusterName}-${ServiceName}-Application-Errors'
-      AlarmDescription: CRITICAL - Application errors in container logs indicate service failures (5XX equivalent)
-      MetricName: Errors
-      Namespace: Custom/ECS
-      Statistic: Sum
-      Period: 300
-      EvaluationPeriods: 1
-      Threshold: !Ref AlarmThreshold
-      ComparisonOperator: GreaterThanOrEqualToThreshold
-      Dimensions:
-        - Name: ClusterName
-          Value: !Ref ClusterName
-        - Name: ServiceName
-          Value: !Ref ServiceName
-      AlarmActions:
-        - !Ref SnsTopicArn
-      TreatMissingData: notBreaching
-      Tags:
-        - Key: Service
-          Value: ECS
-        - Key: AlertType
-          Value: Application-Errors
-        - Key: Severity
-          Value: Critical
+          - Sid: EventBridgePipesPermissions
+            Effect: Allow
+            Action:
+              - pipes:CreatePipe
+              - pipes:UpdatePipe
+              - pipes:DeletePipe
+              - pipes:DescribePipe
+              - pipes:ListPipes
+              - pipes:StartPipe
+              - pipes:StopPipe
+              - pipes:TagResource
+              - pipes:UntagResource
+              - pipes:ListTagsForResource
+            Resource:
+              - !Sub 'arn:aws:pipes:${AWS::Region}:${AWS::AccountId}:pipe/*'
 
-Outputs:
-  ServiceDownAlarmName:
-    Description: Name of the service down alarm (complete outage)
-    Value: !Ref ECSServiceDownAlarm
-
-  TaskCrashLoopAlarmName:
-    Description: Name of the task crash loop alarm
-    Value: !Ref ECSTaskFailuresAlarm
-
-  ApplicationErrorsAlarmName:
-    Description: Name of the application errors alarm (5XX equivalent)
-    Value: !Ref ECSApplicationErrorsAlarm
-
-  TaskCountAlarmName:
-    Description: Name of the task count alarm
-    Value: !Ref ECSTaskCountAlarm
+          - Sid: PassRoleForPipes
+            Effect: Allow
+            Action:
+              - iam:PassRole
+            Resource: '*'
+            Condition:
+              StringEquals:
+                iam:PassedToService: pipes.amazonaws.com
